@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import pickle
 import random
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 from psychopy import core, event, visual
@@ -432,12 +432,27 @@ def run_task(fname: str):
             pass
 
 
+def _sanitize_participant_name(raw_name: str) -> str:
+    cleaned = "_".join(raw_name.strip().lower().split())
+    cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch == "_")
+    return cleaned.strip("_")
+
+
+def _build_session_prefix(participant: str) -> str:
+    date_prefix = datetime.now().strftime("%m_%d_%y")
+    return f"{date_prefix}_{participant}_mental"
+
+
+def _prompt_session_prefix() -> str:
+    while True:
+        raw = input("Enter participant name: ")
+        participant = _sanitize_participant_name(raw)
+        if participant:
+            return _build_session_prefix(participant)
+        print("Participant name cannot be empty. Please try again.")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run mental command training/live task.")
-    parser.add_argument(
-        "--fname",
-        required=True,
-        help="Base filename for all saved session artifacts (without extension).",
-    )
-    args = parser.parse_args()
-    run_task(fname=args.fname)
+    fname = _prompt_session_prefix()
+    print(f"[SESSION] Using filename prefix: {fname}")
+    run_task(fname=fname)

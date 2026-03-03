@@ -6,9 +6,9 @@
 # The raw CSV captures EEG + TRG so every event marker is preserved.
 from __future__ import annotations
 
-import argparse
 import random
 import time
+from datetime import datetime
 import serial
 
 import numpy as np
@@ -608,15 +608,30 @@ def run_task(fname: str):
             pass
 
 
+def _sanitize_participant_name(raw_name: str) -> str:
+    cleaned = "_".join(raw_name.strip().lower().split())
+    cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch == "_")
+    return cleaned.strip("_")
+
+
+def _build_session_prefix(participant: str) -> str:
+    date_prefix = datetime.now().strftime("%m_%d_%y")
+    return f"{date_prefix}_{participant}_live"
+
+
+def _prompt_session_prefix() -> str:
+    while True:
+        raw = input("Enter participant name: ")
+        participant = _sanitize_participant_name(raw)
+        if participant:
+            return _build_session_prefix(participant)
+        print("Participant name cannot be empty. Please try again.")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run motor-imagery BCI PsychoPy task.")
-    parser.add_argument(
-        "--fname",
-        required=True,
-        help="Base filename for all saved session artifacts (without extension).",
-    )
-    args = parser.parse_args()
+    fname = _prompt_session_prefix()
+    print(f"[SESSION] Using filename prefix: {fname}")
     try:
-        run_task(fname=args.fname)
+        run_task(fname=fname)
     except KeyboardInterrupt:
         pass
