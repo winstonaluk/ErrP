@@ -6,9 +6,9 @@ import numpy as np
 from mne.filter import filter_data, notch_filter
 from pyriemann.estimation import Covariances
 from pyriemann.tangentspace import TangentSpace
+from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import balanced_accuracy_score, f1_score
-from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.metrics import balanced_accuracy_score, confusion_matrix, f1_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -85,29 +85,66 @@ class MCQuality:
     macro_f1: float
     n_samples: int
     n_per_class: dict[str, int]
+    per_class_accuracy: dict[str, float]
 
 
 def evaluate_cv_quality(
     X: np.ndarray,
     y: np.ndarray,
+    block_ids: np.ndarray,
     model_cfg: MentalCommandModelConfig,
     cv_splits_max: int,
 ) -> MCQuality:
+    y = np.asarray(y, dtype=int)
+    block_ids = np.asarray(block_ids, dtype=int)
+    if y.shape[0] != X.shape[0] or block_ids.shape[0] != X.shape[0]:
+        raise ValueError("X, y, and block_ids must have the same first dimension")
+
     classes, counts = np.unique(y, return_counts=True)
-    min_count = int(np.min(counts))
-    n_splits = min(int(cv_splits_max), min_count)
+    # Build class-local block ids so each fold can hold out exactly one 8s block per class.
+    class_block_ids = {}
+    for c in classes:
+        class_mask = y == int(c)
+        uniq = np.unique(block_ids[class_mask])
+        class_block_ids[int(c)] = np.sort(uniq)
+
+    min_block_count = min(len(v) for v in class_block_ids.values())
+    n_splits = min(int(cv_splits_max), int(min_block_count))
     if n_splits < 2:
-        raise ValueError(f"Not enough class samples for CV: counts={dict(zip(classes, counts))}")
+        block_counts = {int(c): len(class_block_ids[int(c)]) for c in classes}
+        raise ValueError(
+            f"Not enough registration blocks for grouped CV: per-class blocks={block_counts}"
+        )
 
     clf = make_mental_command_classifier(model_cfg)
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    y_pred = cross_val_predict(clf, X, y, cv=cv, method="predict")
+    y_pred = np.empty_like(y)
+
+    # Fold k: hold out one class-specific registration block for each class.
+    for k in range(n_splits):
+        test_mask = np.zeros(y.shape[0], dtype=bool)
+        for c in classes:
+            held_out_block = class_block_ids[int(c)][k]
+            test_mask |= (y == int(c)) & (block_ids == int(held_out_block))
+        train_mask = ~test_mask
+        if not np.any(test_mask) or not np.any(train_mask):
+            raise ValueError(f"Invalid CV split at fold {k}")
+
+        fold_clf = clone(clf)
+        fold_clf.fit(X[train_mask], y[train_mask])
+        y_pred[test_mask] = fold_clf.predict(X[test_mask])
+
+    cm = confusion_matrix(y, y_pred, labels=classes)
+    denom = np.sum(cm, axis=1)
+    per_class_acc = {}
+    for i, c in enumerate(classes):
+        per_class_acc[str(int(c))] = float(cm[i, i] / denom[i]) if denom[i] > 0 else 0.0
 
     return MCQuality(
         balanced_accuracy=float(balanced_accuracy_score(y, y_pred)),
         macro_f1=float(f1_score(y, y_pred, average="macro")),
         n_samples=int(len(y)),
         n_per_class={str(int(c)): int(n) for c, n in zip(classes, counts)},
+        per_class_accuracy=per_class_acc,
     )
 
 

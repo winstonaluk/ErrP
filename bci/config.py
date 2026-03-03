@@ -125,12 +125,6 @@ class MentalCommandTaskConfig:
     live_display_smoothing_alpha: float = 0.25
     min_confidence_to_show: float = 0.20
 
-    # Optional periodic supervised adaptation during guided live phase.
-    enable_live_adaptation: bool = False
-    adaptation_retrain_every_trials: int = 6
-    n_adaptation_trials: int = 12
-    adaptation_trial_duration_s: float = 6.0
-
     # Visualization runtime.
     live_duration_s: float = 180.0
 
