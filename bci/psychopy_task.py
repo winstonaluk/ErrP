@@ -97,6 +97,18 @@ class BalancedBlockScheduler:
 
 
 # ----------------------------------------------------------------
+# Arrow vertices for the prep cue (norm units, centred at origin)
+# ----------------------------------------------------------------
+
+_ARROW_VERTS_RIGHT = [
+    (-0.25, 0.04), (0.05, 0.04), (0.05, 0.10),
+    (0.25, 0.0),
+    (0.05, -0.10), (0.05, -0.04), (-0.25, -0.04),
+]
+_ARROW_VERTS_LEFT = [(-x, y) for x, y in _ARROW_VERTS_RIGHT]
+
+
+# ----------------------------------------------------------------
 # PsychoPy task
 # ----------------------------------------------------------------
 
@@ -128,7 +140,7 @@ def run_task():
     MI_DURATION = eeg_cfg.tmax - eeg_cfg.tmin  # e.g. 2.0 s
     ITI = 3.0
     N_CAL_TRIALS = cal_cfg.n_calibration_trials
-    N_LIVE_TRIALS = 60
+    N_LIVE_TRIALS = 30
     EPOCH_POLL_TIMEOUT = eeg_cfg.tmin + 1.5  # seconds to wait for epoch after MI
 
     # UI geometry & colours
@@ -199,11 +211,16 @@ def run_task():
     cursor = visual.Circle(win, radius=CURSOR_RADIUS, edges=64, pos=(0, 0), fillColor=CURSOR, lineColor=WHITE)
     cue_text = visual.TextStim(win, text="", pos=(0, 0.35), height=0.08, color=WHITE)
     status_text = visual.TextStim(win, text="", pos=(0, -0.45), height=0.05, color=WHITE)
+    prep_arrow = visual.ShapeStim(
+        win, vertices=_ARROW_VERTS_RIGHT, pos=(0, 0.15),
+        fillColor=LIT, lineColor=WHITE, lineWidth=2, opacity=0,
+    )
 
     def draw_scene():
         left_target.draw()
         right_target.draw()
         cursor.draw()
+        prep_arrow.draw()
         cue_text.draw()
         status_text.draw()
 
@@ -331,11 +348,14 @@ def run_task():
             reset_cursor(duration=0.15)
             wait_with_display(ITI)
 
-            # --- Prepare ---
+            # --- Prepare (arrow cue) ---
             set_targets(None)
-            cue_text.text = f"Prepare: {code_to_name(y_true_code)}"
+            cue_text.text = "Prepare"
+            prep_arrow.vertices = _ARROW_VERTS_LEFT if y_true_code == LEFT else _ARROW_VERTS_RIGHT
+            prep_arrow.opacity = 1
             status_text.text = "Get ready..."
             wait_with_display(PREP_DURATION)
+            prep_arrow.opacity = 0
 
             # --- MI cue onset: display then trigger ---
             set_targets(code_to_side(y_true_code))
@@ -373,6 +393,17 @@ def run_task():
             status_text.text = f"Epoch captured ({len(X_cal)}/{N_CAL_TRIALS})"
             draw_scene()
             win.flip()
+
+            # --- Break after every max_trials_before_break trials ---
+            if (
+                (cal_idx + 1) % cal_cfg.max_trials_before_break == 0
+                and (cal_idx + 1) < N_CAL_TRIALS
+            ):
+                cue_text.text = "Break!\n\nPress SPACE when ready to continue."
+                status_text.text = f"Completed {cal_idx + 1}/{N_CAL_TRIALS} calibration trials"
+                draw_scene()
+                win.flip()
+                wait_for_space()
 
         # ==============================================================
         # TRAINING
@@ -444,11 +475,14 @@ def run_task():
             reset_cursor(duration=0.15)
             wait_with_display(ITI)
 
-            # --- Prepare ---
+            # --- Prepare (arrow cue) ---
             set_targets(None)
-            cue_text.text = f"Prepare: {code_to_name(y_true_code)}"
+            cue_text.text = "Prepare"
+            prep_arrow.vertices = _ARROW_VERTS_LEFT if y_true_code == LEFT else _ARROW_VERTS_RIGHT
+            prep_arrow.opacity = 1
             status_text.text = "Get ready..."
             wait_with_display(PREP_DURATION)
+            prep_arrow.opacity = 0
 
             # --- MI cue onset: display then trigger ---
             set_targets(code_to_side(y_true_code))
@@ -514,11 +548,6 @@ def run_task():
 
             wait_with_display(0.4)
             set_targets(None)
-
-            # --- Sliding window ---
-            if model_cfg.use_sliding_window and len(y_store) > model_cfg.window_size_epochs:
-                X_store = X_store[-model_cfg.window_size_epochs :]
-                y_store = y_store[-model_cfg.window_size_epochs :]
 
             # --- Online retraining ---
             if (total_accepted - last_train_at) >= model_cfg.retrain_every and len(y_store) >= 4:

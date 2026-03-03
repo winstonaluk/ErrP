@@ -55,22 +55,19 @@ class EEGConfig:
 @dataclass(frozen=True)
 class CalibrationConfig:
     # Number of initial normal trials to use for calibration (no feedback).
-    n_calibration_trials: int = 40
+    n_calibration_trials: int = 80
+    # Maximum calibration trials in a row before a mandatory break.
+    max_trials_before_break: int = 30
 
 
 @dataclass(frozen=True)
 class ModelConfig:
     # Retrain every N new accepted epochs
-    retrain_every: int = 10
+    retrain_every: int = 30
 
     use_riemann: bool = True  # if False, use CSP+LR; if True, use Riemannian geometry approach
     # CSP configuration
     n_csp_components: int = 6
-
-    # Use sliding window to adapt to nonstationarity (user learning)
-    use_sliding_window: bool = True
-    window_size_epochs: int = 120  # keep last N epochs for retraining
-
 
 @dataclass(frozen=True)
 class SerialConfig:
@@ -95,3 +92,58 @@ class SessionConfig:
 
     # Raw stream capture during full session (calibration + online)
     raw_csv_suffix: str = "_raw.csv"
+
+
+@dataclass(frozen=True)
+class MentalCommandLabelConfig:
+    neutral_code: int = 10
+    command1_code: int = 11
+    command2_code: int = 12
+
+    command1_name: str = "Command 1"
+    command2_name: str = "Command 2"
+
+    def all_codes(self) -> tuple[int, int, int]:
+        return (self.neutral_code, self.command1_code, self.command2_code)
+
+
+@dataclass(frozen=True)
+class MentalCommandTaskConfig:
+    # Emotiv Mental Command training uses ~8 second training blocks.
+    register_duration_s: float = 8.0
+    rest_duration_s: float = 2.0
+    prep_duration_s: float = 1.5
+
+    # Repetitions per class for registration.
+    n_register_neutral: int = 5
+    n_register_command: int = 5
+
+    # Sliding-window extraction from registration blocks.
+    train_window_s: float = 1.0
+    train_window_step_s: float = 0.25
+
+    # Continuous live feedback settings.
+    live_update_interval_s: float = 0.10
+    live_display_smoothing_alpha: float = 0.25
+    min_confidence_to_show: float = 0.20
+
+    # Optional periodic supervised adaptation during guided live phase.
+    enable_live_adaptation: bool = False
+    adaptation_retrain_every_trials: int = 6
+    n_adaptation_trials: int = 12
+    adaptation_trial_duration_s: float = 6.0
+
+    # Visualization runtime.
+    live_duration_s: float = 180.0
+
+
+@dataclass(frozen=True)
+class MentalCommandModelConfig:
+    # Riemannian features + multinomial logistic regression.
+    C: float = 1.0
+    max_iter: int = 1500
+    class_weight: str | None = "balanced"
+
+    # Basic CV quality gate before live mode.
+    cv_splits_max: int = 5
+    min_per_class_for_cv: int = 4
