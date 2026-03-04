@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pickle
-import random
 from collections import Counter
 from datetime import datetime
 
@@ -147,6 +146,19 @@ def run_task(fname: str):
             if "escape" in keys:
                 raise KeyboardInterrupt
 
+    def wait_for_block_decision() -> bool:
+        """Return True if accepted, False if rejected/retry."""
+        while True:
+            tick_recorder()
+            draw_frame()
+            keys = event.getKeys()
+            if "space" in keys:
+                return True
+            if "r" in keys:
+                return False
+            if "escape" in keys:
+                raise KeyboardInterrupt
+
     def collect_block(duration_s: float) -> np.ndarray:
         chunks = []
         last_ts = None
@@ -195,54 +207,126 @@ def run_task(fname: str):
         update_bar(0.0, 0.0, 1.0)
         wait_for_space()
 
-        trial_codes = (
-            [code_neutral] * int(task_cfg.n_register_neutral)
-            + [code_c1] * int(task_cfg.n_register_command)
-            + [code_c2] * int(task_cfg.n_register_command)
-        )
-        random.shuffle(trial_codes)
-        class_trial_counter = {code_neutral: 0, code_c1: 0, code_c2: 0}
-
-        for i, code in enumerate(trial_codes, start=1):
-            trial_block_id = int(class_trial_counter[code])
-            class_trial_counter[code] += 1
-            cue.text = "Rest"
-            status.text = f"Registration trial {i}/{len(trial_codes)}"
+        class_plan = [
+            (code_neutral, "Neutral", int(task_cfg.n_register_neutral)),
+            (code_c1, label_cfg.command1_name, int(task_cfg.n_register_command)),
+            (code_c2, label_cfg.command2_name, int(task_cfg.n_register_command)),
+        ]
+        for class_idx, (code, class_name, n_blocks) in enumerate(class_plan):
+            cue.text = (
+                f"Calibration target: {class_name}\n\n"
+                f"You will complete {n_blocks} accepted blocks.\n"
+                "Press SPACE when ready to start this target."
+            )
+            status.text = "Each block is 8s, then you choose accept or redo."
             detected.text = ""
             update_bar(0.0, 0.0, 1.0)
-            wait_with_display(task_cfg.rest_duration_s)
+            wait_for_space()
 
-            cue.text = f"Prepare: {code_to_name[code]}"
-            status.text = "Get ready..."
-            wait_with_display(task_cfg.prep_duration_s)
+            for block_num in range(1, n_blocks + 1):
+                trial_block_id = block_num - 1
+                attempt = 0
+                while True:
+                    attempt += 1
+                    cue.text = f"{class_name} block {block_num}/{n_blocks}"
+                    status.text = "Press SPACE to start this block."
+                    detected.text = f"Attempt {attempt}"
+                    update_bar(0.0, 0.0, 1.0)
+                    wait_for_space()
 
-            cue.text = f"Perform: {code_to_name[code]}"
-            status.text = f"Hold this mental state for {task_cfg.register_duration_s:.1f}s"
-            block = collect_block(task_cfg.register_duration_s)
+                    cue.text = f"Prepare: {class_name}"
+                    status.text = "Get ready..."
+                    detected.text = ""
+                    wait_with_display(task_cfg.prep_duration_s)
 
-            if block.shape[1] < w_samples:
-                print(f"[REG] Trial {i}: not enough data ({block.shape[1]} samples), skipping")
-                continue
+                    cue.text = f"Perform: {class_name}"
+                    status.text = f"Hold this mental state for {task_cfg.register_duration_s:.1f}s"
+                    block = collect_block(task_cfg.register_duration_s)
 
-            windows = split_windows(
-                block=block,
-                sfreq=sfreq,
-                window_s=task_cfg.train_window_s,
-                step_s=task_cfg.train_window_step_s,
-            )
-            if windows.shape[0] == 0:
-                continue
+                    if block.shape[1] < w_samples:
+                        print(
+                            f"[REG] {class_name} block {block_num} attempt {attempt}: "
+                            f"not enough data ({block.shape[1]} samples), retrying"
+                        )
+                        cue.text = f"{class_name} block too short"
+                        status.text = "Not enough EEG samples. Press SPACE to retry."
+                        detected.text = ""
+                        update_bar(0.0, 0.0, 1.0)
+                        wait_for_space()
+                        continue
 
-            windows = filter_window(windows, eeg_cfg=eeg_cfg, sfreq=sfreq)
-            accepted = 0
-            for w in windows:
-                if reject_thresh is not None and float(np.ptp(w, axis=-1).max()) > reject_thresh:
-                    continue
-                model_windows.append(w)
-                model_labels.append(int(code))
-                model_block_ids.append(trial_block_id)
-                accepted += 1
-            print(f"[REG] Trial {i}: {accepted}/{len(windows)} windows accepted for {code_to_name[code]}")
+                    windows = split_windows(
+                        block=block,
+                        sfreq=sfreq,
+                        window_s=task_cfg.train_window_s,
+                        step_s=task_cfg.train_window_step_s,
+                    )
+                    if windows.shape[0] == 0:
+                        cue.text = "No windows extracted"
+                        status.text = "Press SPACE to retry this block."
+                        detected.text = ""
+                        update_bar(0.0, 0.0, 1.0)
+                        wait_for_space()
+                        continue
+
+                    windows = filter_window(windows, eeg_cfg=eeg_cfg, sfreq=sfreq)
+                    block_windows = []
+                    for w in windows:
+                        if reject_thresh is not None and float(np.ptp(w, axis=-1).max()) > reject_thresh:
+                            continue
+                        block_windows.append(w)
+
+                    if len(block_windows) == 0:
+                        cue.text = "No usable windows in this block"
+                        status.text = "All windows rejected. Press SPACE to retry."
+                        detected.text = ""
+                        update_bar(0.0, 0.0, 1.0)
+                        wait_for_space()
+                        continue
+
+                    cue.text = f"Review block: {class_name} {block_num}/{n_blocks}"
+                    status.text = (
+                        f"Usable windows: {len(block_windows)}/{len(windows)}\n"
+                        "SPACE = accept block, R = reject and redo"
+                    )
+                    detected.text = "Did you maintain the intended mental state?"
+                    update_bar(0.0, 0.0, 1.0)
+                    is_accepted = wait_for_block_decision()
+                    if not is_accepted:
+                        print(
+                            f"[REG] {class_name} block {block_num} attempt {attempt}: user rejected"
+                        )
+                        cue.text = f"Redo: {class_name} block {block_num}/{n_blocks}"
+                        status.text = "Press SPACE when ready to record again."
+                        detected.text = ""
+                        update_bar(0.0, 0.0, 1.0)
+                        wait_for_space()
+                        continue
+
+                    for w in block_windows:
+                        model_windows.append(w)
+                        model_labels.append(int(code))
+                        model_block_ids.append(trial_block_id)
+                    print(
+                        f"[REG] Accepted {class_name} block {block_num}/{n_blocks}: "
+                        f"{len(block_windows)}/{len(windows)} windows (attempt {attempt})"
+                    )
+                    break
+
+                if block_num < n_blocks:
+                    cue.text = f"{class_name} block {block_num}/{n_blocks} accepted"
+                    status.text = "Press SPACE when ready for the next block."
+                    detected.text = ""
+                    update_bar(0.0, 0.0, 1.0)
+                    wait_for_space()
+
+            if class_idx < (len(class_plan) - 1):
+                next_name = class_plan[class_idx + 1][1]
+                cue.text = f"{class_name} calibration complete"
+                status.text = f"Next target: {next_name}\nPress SPACE to continue."
+                detected.text = ""
+                update_bar(0.0, 0.0, 1.0)
+                wait_for_space()
 
         if len(model_labels) == 0:
             raise RuntimeError("No registration windows collected")
